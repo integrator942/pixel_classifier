@@ -6,7 +6,7 @@ defects=[]
 coordinates=[]
 
 try:
-    with open("DefectMap4.dmap", "rb") as file:
+    with open("DefectMap3.dmap", "rb") as file:
         while True:
                 defects.append(struct.unpack('<i', file.read(4))[0])
 except FileNotFoundError:
@@ -28,32 +28,17 @@ coordinates=np.asarray(coordinates)
 max_value=np.max(coordinates)
 obj=np.ones((max_value+1, max_value+1))
 for i in range(len(coordinates)):
-    obj[coordinates[i][0]][coordinates[i][1]]=0
-print(obj)
+    obj[coordinates[i][0]][coordinates[i][1]] = 0
+
+from PIL import Image
+image_normalized = (obj * 65535).astype(np.uint16)
+img = Image.fromarray(image_normalized, mode='I;16B')
+img.save('DefectMap.tiff')
 
 
 
-
-
-
-"""
-# Создаем цветовую карту: 0 -> красный, 1 -> черный
-from matplotlib import colors
-cmap = colors.ListedColormap(['red', 'black'])
-
-plt.figure(figsize=(6, 6))
-plt.imshow(matrix, cmap=cmap, interpolation='nearest')
-
-# Добавляем сетку и значения
-for i in range(matrix.shape[0]):
-    for j in range(matrix.shape[1]):
-        plt.text(j, i, str(matrix[i, j]),
-                ha='center', va='center',
-                color='white' if matrix[i, j] == 0 else 'yellow',
-                fontsize=14, fontweight='bold')
-
-plt.title('0 = красный, 1 = черный', fontsize=14)
-plt.axis('off')  # Скрыть оси
-plt.show()
-"""
+#from PIL import Image
+#img = Image.fromarray(obj, 'I;16B')
+#plt.imshow(img)
+#plt.show()
 
