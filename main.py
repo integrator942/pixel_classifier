@@ -58,18 +58,18 @@ def analyze_shape(component): #Один компонент из списка к�
 
     bbox_area = width * height #Размер прямоугольника
 
-    isolated_pixel_counter = isolated_pixel_counter_function(points, size) #Сколько изолированных пикселей в компоненте
+    isolated_pixel_counter = isolated_pixel_counter_function(component, size) #Сколько изолированных пикселей в компоненте
 
     return size, width, height, bbox_area, isolated_pixel_counter
 
-def isolated_pixel_counter_function(points, size):
+def isolated_pixel_counter_function(component, size):
     pixel_counter = 0  # Счётчик изолированных пикселей компонента
     for j in range(size):
-        x, y = points[j]  # Записали координаты пикселя из кортежа
+        x, y = component[j]  # Записали координаты пикселя из кортежа
         counter = 0  # Счётчик для пикселей связности 8
         for dx, dy in directions_list:
             nx, ny = x + dx, y + dy
-            if (nx, ny) in points[j]:  # Если такой компонент (кортеж) есть
+            if (nx, ny) in component:  # Если такой компонент (кортеж) есть
                 counter += 1
         if counter == 8:  # Если за цикл мы насчитали 8 пикселей, то пиксель изолирован
             pixel_counter += 1
