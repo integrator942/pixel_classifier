@@ -13,6 +13,7 @@ directions_list = [                    #Связность 8
         (0, -1),           (0, 1),
         (1, -1), (1, 0), (1, 1)
     ]
+#len_component = 2000 #Предельный размер связного компонента (чтобы не грузить комп линейными дефектами)
 
 def find_connected_components(image):
     def_pix_counter = 0
@@ -66,38 +67,31 @@ def analyze_shape(component): #Один компонент из списка к�
 
     return size, width, height, bbox_area, isolated_pixel_counter
 
+
 def isolated_pixel_counter_function(component, size):
-    pixel_counter = 0  # Счётчик изолированных пикселей компонента
+    component_set = set(component) # Преобразуем компонент в множество для O(1) поиска
+    pixel_counter = 0
     for j in range(size):
-        x, y = component[j]  # Записали координаты пикселя из кортежа
-        counter = 0  # Счётчик для пикселей связности 8
+        x, y = component[j]
+        counter = 0
         for dx, dy in directions_list:
-            nx, ny = x + dx, y + dy
-            if (nx, ny) in component:  # Если такой компонент (кортеж) есть
+            if (x + dx, y + dy) in component_set:
                 counter += 1
-        if counter == 8:  # Если за цикл мы насчитали 8 пикселей, то пиксель изолирован
+        if counter == 8:
             pixel_counter += 1
     return pixel_counter
 
 def determine_shape_type(components):
-    dict_component = {
-        'Isolated defective pixels': 0,
+
+    dict_component={
+        'Isolated defective pixels': 0, #Если хотим Row defect
         'Point pixel defect': 0,
         'Cluster defect': {'Small': 0,
                            'Medium': 0,
                            'Large': 0},
         'Spot defect': 0,
+        'Non-classified connected': 0
     }
-
-    # dict_component={
-    #     'Isolated defective pixels': 0, #Если хотим Row defect
-    #     'Point pixel defect': 0,
-    #     'Cluster defect': {'Small': 0,
-    #                        'Medium': 0,
-    #                        'Large': 0},
-    #     'Spot defect': 0,
-    #     'Row defect': 0,
-    # }
 
     for j in range(len(components)):
         classified = False
@@ -122,12 +116,10 @@ def determine_shape_type(components):
             dict_component['Cluster defect']['Large'] += 1
             classified = True
 
-        if size >= 16 and (width/height>=16 or height/width>=16) and classified==False:
-            #dict_component['Row defect'] += 1 #Row defect в другом месте будут
-            classified = True
-
-        if not classified: # Дефект Spot Cluster
+        if size >= 26 and bbox_area<=169 and width != 1 and height != 1 and classified==False: # Дефект Spot Cluster
             dict_component['Spot defect'] += 1
+
+        if not classified: dict_component['Non-classified connected'] += 1
 
     return dict_component
 
@@ -182,7 +174,7 @@ def get_dir_dmap(): #Получить список с путями к dmap`ам
                     height_f = int(match.group(2))
                     size_detector.append((width_f, height_f))
                 else:
-                    print('В имени файла нет размеров, обработка будет некорректная. Добавьте размер в формате AAAAxBBBB в имя файла')
+                    print('     В имени файла нет размеров, обработка будет некорректная. Добавьте размер в формате AAAAxBBBB в имя файла')
                     size_detector.append(None)
     return path, size_detector
 
@@ -207,9 +199,35 @@ def xml_export(blemish, path):
         f.write(pretty_xml)
     return xml_path + '.xml'
 
+def determine_rows_cols(obj_):
+    dict_row_col = {
+        'Row Defect': {'Single': 0,
+                           'Double': 0,
+                          'Triple': 0,
+                       'Small Row Defects': 0},
+        'Column Defect': {'Single': 0,
+                           'Double': 0,
+                          'Triple': 0,
+                          'Small Column Defects': 0,
+                           'Total Pixel Count for Column Defects': 0}
+    }
+
+    rows, cols = obj_.shape
+    #Тут надо сделать разделение на сегменты
+    for i_rows in range(rows):
+        col=[]
+        for j_cols in range(cols):
+            col.append(obj_[i_rows, j_cols])
+
+
+
+
+
+    return dict_row_col
+
 if __name__ == "__main__":
     file_path, detector_size = get_dir_dmap()
-    print('Всего файлов в папке dmap -', len(file_path))
+    print('Всего файлов в папке', dmap_folder, '-', len(file_path))
     for k in range(len(file_path)):
         defects = []  # В этот список записывается весь файл dmap
         coordinates = []  # Список для координат битых пикселей из dmap
@@ -231,24 +249,29 @@ if __name__ == "__main__":
             if not detector_size[k]:
                 max_value = np.max(coordinates) #Если нет в имени файла размеров
                 obj = np.ones((max_value + 2, max_value + 2))  # +2 чтобы убрать граничные условия. Чтобы по бокам были пиксели
+                obj_rows_cols = np.ones((max_value, max_value))
             else:
                 max_x_detector = detector_size[k][0] #Если в имени файла есть размеры
                 max_y_detector = detector_size[k][1]
                 obj = np.ones((max_x_detector + 2, max_y_detector + 2))  # +2 чтобы убрать граничные условия. Чтобы по бокам были пиксели
+                obj_rows_cols = np.ones((max_x_detector, max_y_detector))
             for i in range(len(coordinates)):
                 obj[coordinates[i][0] + 1][coordinates[i][1] + 1] = 0  # +1 так как граничные условия
             image_save(obj, file_path[k]) #Сохраняем карту битых пикселей
-            print('Карта битых пикселей сохранена как .tiff')
+            print('     Карта битых пикселей сохранена как .tiff')
             list_components, defect_pixel_counter = find_connected_components(obj) #Возвращает лист с несвязными кластерами и общее количество дефектных пикселей
-            print('Несвязные кластеры определены, выполняется их классификация')
+            print('     Несвязные кластеры определены, выполняется их классификация и расчёт изолированных пикселей')
             d = determine_shape_type(list_components) #Классификация и кластеризация
             Blemish_type = {'Total defect pixels': defect_pixel_counter}
-            Blemish_type.update(d)
-            print(Blemish_type)
+            Blemish_type.update(d) #Словарь без RowCol
+
+            row_column_dict=determine_rows_cols(obj_rows_cols)
+            Blemish_type.update(row_column_dict)
+            print('     ', Blemish_type)
             xml_save_path=xml_export(Blemish_type, file_path[k]) #Экспорт в xml
-            print('Сохранён xml файл с классификацией')
+            print('     Сохранён xml файл с классификацией')
         except Exception as e:
-            print(f"Другая ошибка: {e}") #Другая ошибка
+            print(f"    Другая ошибка: {e}") #Другая ошибка
     print('Все файлы обработаны')
 
 
