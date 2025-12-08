@@ -1,10 +1,14 @@
 import struct
 import numpy as np
 from collections import deque
+import os
+import xml.etree.ElementTree as ET  # Сохраняем как xml
+import xml.dom.minidom
+import re
 
-way="DefectMap3.dmap"
-
-directions_list = [
+dmap_folder='dmap' #Название папки в директории со скриптом, где лежат все dmap`ы
+extension='.dmap' #Расширение файлов
+directions_list = [                    #Связность 8
         (-1, -1), (-1, 0), (-1, 1),
         (0, -1),           (0, 1),
         (1, -1), (1, 0), (1, 1)
@@ -76,20 +80,28 @@ def isolated_pixel_counter_function(component, size):
     return pixel_counter
 
 def determine_shape_type(components):
-
-    dict_component={
+    dict_component = {
         'Isolated defective pixels': 0,
         'Point pixel defect': 0,
         'Cluster defect': {'Small': 0,
                            'Medium': 0,
                            'Large': 0},
         'Spot defect': 0,
-        'Row defect': 0,
     }
 
-    for i in range(len(components)):
+    # dict_component={
+    #     'Isolated defective pixels': 0, #Если хотим Row defect
+    #     'Point pixel defect': 0,
+    #     'Cluster defect': {'Small': 0,
+    #                        'Medium': 0,
+    #                        'Large': 0},
+    #     'Spot defect': 0,
+    #     'Row defect': 0,
+    # }
+
+    for j in range(len(components)):
         classified = False
-        component=components[i]
+        component = components[j]
 
         size, width, height, bbox_area, isolated_pixel_counter = analyze_shape(component)
         dict_component['Isolated defective pixels'] += isolated_pixel_counter
@@ -111,7 +123,7 @@ def determine_shape_type(components):
             classified = True
 
         if size >= 16 and (width/height>=16 or height/width>=16) and classified==False:
-            dict_component['Row defect'] += 1
+            #dict_component['Row defect'] += 1 #Row defect в другом месте будут
             classified = True
 
         if not classified: # Дефект Spot Cluster
@@ -119,47 +131,125 @@ def determine_shape_type(components):
 
     return dict_component
 
+
+def dict_to_xml_safe(dictionary, root_tag='root'):
+    """Безопасная конвертация словаря в XML с валидацией имен тегов"""
+
+    def sanitize_tag(tag):
+        """Очищает имя тега от недопустимых символов"""
+        # Заменяем недопустимые символы
+        tag = str(tag).replace(' ', '_').replace('(', '').replace(')', '')
+        tag = tag.replace('@', '').replace('$', '').replace('#', '')
+        # Тег не может начинаться с цифры
+        if tag and tag[0].isdigit():
+            tag = 'item_' + tag
+        return tag
+
+    def _dict_to_xml(parent, dict_obj):
+        for key, value in dict_obj.items():
+            safe_key = sanitize_tag(key)
+            element = ET.SubElement(parent, safe_key)
+
+            if isinstance(value, dict):
+                _dict_to_xml(element, value)
+            elif isinstance(value, list):
+                for item in value:
+                    item_elem = ET.SubElement(element, 'item')
+                    if isinstance(item, dict):
+                        _dict_to_xml(item_elem, item)
+                    else:
+                        item_elem.text = str(item)
+            else:
+                element.text = str(value)
+
+    root = ET.Element(root_tag)
+    _dict_to_xml(root, dictionary)
+    return ET.ElementTree(root)
+
+def get_dir_dmap(): #Получить список с путями к dmap`ам
+    size_detector=[]
+    pattern = r'(\d+)x(\d+)' #Для записи размеров детектора 4608x5888. Может быть и 3 на 3 числа. если хотим 4 на 4, то вот: r'(\d{4})x(\d{4})'
+    path = []  # Список для путей файла
+    script_dir = os.path.dirname(os.path.abspath(__file__))  # Путь к скрипту
+    files_folder = os.path.join(script_dir, dmap_folder)  # название папки, где dmap ы лежат
+    if os.path.exists(files_folder) and os.path.isdir(files_folder):  # Проверяем, существует ли папка и является ли она папкой
+        for filename in os.listdir(files_folder):  # Обрабатываем все файлы в папке
+            if filename.lower().endswith(extension):
+                path.append(os.path.join(files_folder, filename))
+                match = re.search(pattern, filename, re.IGNORECASE)
+                if match:
+                    width_f = int(match.group(1))
+                    height_f = int(match.group(2))
+                    size_detector.append((width_f, height_f))
+                else:
+                    print('В имени файла нет размеров, обработка будет некорректная. Добавьте размер в формате AAAAxBBBB в имя файла')
+                    size_detector.append(None)
+    return path, size_detector
+
+def image_save(obj_, path):
+    from PIL import Image  # Экспорт изображения для его просмотра
+    image_normalized = (obj_ * 65535).astype(np.uint16)
+    img = Image.fromarray(image_normalized).convert('I;16B')  # Сохраняем как 16-битное изображение
+    tiff_path = path.rstrip('.dmap')
+    img.save(tiff_path + '.tiff')  # Сохраняем в ту же папку, где и был dmap
+
+def xml_export(blemish, path):
+    xml_path = path.rstrip('.dmap')
+    tree = dict_to_xml_safe(blemish, 'Blemish_type')
+    xml_str = ET.tostring(tree.getroot(),
+                          encoding='utf-8',
+                          method='xml')
+    dom = xml.dom.minidom.parseString(xml_str)
+    pretty_xml = dom.toprettyxml(indent="  ")
+    pretty_xml = '\n'.join([line for line in pretty_xml.split('\n')
+                            if line.strip() != ''])
+    with open(xml_path + '.xml', 'w', encoding='utf-8') as f:
+        f.write(pretty_xml)
+    return xml_path + '.xml'
+
 if __name__ == "__main__":
-    defects=[]
-    coordinates=[]
-    try:
-        with open(way, "rb") as file:
-            while True:
-                    defects.append(struct.unpack('<i', file.read(4))[0])
-    except FileNotFoundError:
-        print("Файл не найден") #Нет файла
-
-    except struct.error:
-        print(f"Файл прочитан") #Преобразуем пустое значение
-        defects = np.asarray(defects)
-        length = defects[0]
-        defects = defects[1:]
-        for i in range(length):
-            coordinates.append([defects[0], defects[1]])
-            defects = defects[2:]
-            corr_amount = defects[0]
-            defects = defects[(corr_amount * 2 + 1):]
-        coordinates = np.asarray(coordinates)
-        max_value = np.max(coordinates)
-        obj = np.ones((max_value + 3, max_value + 3))  # +3 чтобы убрать граничные условия. Чтобы по бокам были пиксели
-        for i in range(len(coordinates)):
-            obj[coordinates[i][0] + 1][coordinates[i][1] + 1] = 0  # +1 так как граничные условия
-
-        # Экспорт изображения для его просмотра
-        # from PIL import Image
-        # image_normalized = (obj * 65535).astype(np.uint16)
-        # img = Image.fromarray(image_normalized, mode='I;16B') #Сохраняем как 16-битное изображение
-        # img.save('DefectMap4.tiff')
-
-        list_components, defect_pixel_counter = find_connected_components(obj) #Возвращает лист с несвязными кластерами и общее количество дефектных пикселей
-        d = determine_shape_type(list_components)
-        d1 = {'Total defect pixels': defect_pixel_counter}
-        d1.update(d)
-        print(d1)
-
-    except Exception as e:
-        print(f"Другая ошибка: {e}") #Другая ошибка
-
+    file_path, detector_size = get_dir_dmap()
+    print('Всего файлов в папке dmap -', len(file_path))
+    for k in range(len(file_path)):
+        defects = []  # В этот список записывается весь файл dmap
+        coordinates = []  # Список для координат битых пикселей из dmap
+        try:
+            with open(file_path[k], "rb") as file:
+                while True:
+                        defects.append(struct.unpack('<i', file.read(4))[0])
+        except struct.error: #Когда считали весь dmap
+            print('Файл №', k+1, 'прочитан')
+            defects = np.asarray(defects)
+            length = defects[0]
+            defects = defects[1:]
+            for i in range(length):
+                coordinates.append([defects[0], defects[1]])
+                defects = defects[2:]
+                corr_amount = defects[0]
+                defects = defects[(corr_amount * 2 + 1):]
+            coordinates = np.asarray(coordinates)
+            if not detector_size[k]:
+                max_value = np.max(coordinates) #Если нет в имени файла размеров
+                obj = np.ones((max_value + 2, max_value + 2))  # +2 чтобы убрать граничные условия. Чтобы по бокам были пиксели
+            else:
+                max_x_detector = detector_size[k][0] #Если в имени файла есть размеры
+                max_y_detector = detector_size[k][1]
+                obj = np.ones((max_x_detector + 2, max_y_detector + 2))  # +2 чтобы убрать граничные условия. Чтобы по бокам были пиксели
+            for i in range(len(coordinates)):
+                obj[coordinates[i][0] + 1][coordinates[i][1] + 1] = 0  # +1 так как граничные условия
+            image_save(obj, file_path[k]) #Сохраняем карту битых пикселей
+            print('Карта битых пикселей сохранена как .tiff')
+            list_components, defect_pixel_counter = find_connected_components(obj) #Возвращает лист с несвязными кластерами и общее количество дефектных пикселей
+            print('Несвязные кластеры определены, выполняется их классификация')
+            d = determine_shape_type(list_components) #Классификация и кластеризация
+            Blemish_type = {'Total defect pixels': defect_pixel_counter}
+            Blemish_type.update(d)
+            print(Blemish_type)
+            xml_save_path=xml_export(Blemish_type, file_path[k]) #Экспорт в xml
+            print('Сохранён xml файл с классификацией')
+        except Exception as e:
+            print(f"Другая ошибка: {e}") #Другая ошибка
+    print('Все файлы обработаны')
 
 
 

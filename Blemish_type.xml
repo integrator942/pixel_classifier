@@ -1,0 +1,13 @@
+<?xml version="1.0" ?>
+<Blemish_type>
+  <Total_defect_pixels>1471</Total_defect_pixels>
+  <Isolated_defective_pixels>0</Isolated_defective_pixels>
+  <Point_pixel_defect>0</Point_pixel_defect>
+  <Cluster_defect>
+    <Small>0</Small>
+    <Medium>0</Medium>
+    <Large>0</Large>
+  </Cluster_defect>
+  <Spot_defect>0</Spot_defect>
+  <Row_defect>2</Row_defect>
+</Blemish_type>
