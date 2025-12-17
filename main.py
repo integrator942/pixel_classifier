@@ -84,19 +84,18 @@ def isolated_pixel_counter_function(component, size):
 def determine_shape_type(components):
 
     dict_component={
-        'Isolated defective pixels': 0, #Если хотим Row defect
+        'Isolated defective pixels': 0,
         'Point pixel defect': 0,
         'Cluster defect': {'Small': 0,
                            'Medium': 0,
                            'Large': 0},
         'Spot defect': 0,
-        'Non-classified connected': 0
+        'Large spot defect': 0
     }
-
+    small_row_column = []
     for j in range(len(components)):
         classified = False
         component = components[j]
-
         size, width, height, bbox_area, isolated_pixel_counter = analyze_shape(component)
         dict_component['Isolated defective pixels'] += isolated_pixel_counter
 
@@ -104,24 +103,29 @@ def determine_shape_type(components):
             dict_component['Point pixel defect'] += 1
             classified = True
 
-        if size <= 5 and isolated_pixel_counter==0 and classified==False: # Дефект Small Cluster
+        if size <= 5 and isolated_pixel_counter==0 and width != 1 and height != 1 and classified==False: # Дефект Small Cluster
             dict_component['Cluster defect']['Small'] += 1
             classified = True
 
-        if size <= 15 and isolated_pixel_counter <= 2 and classified==False: # Дефект Medium Cluster
+        if size <= 15 and isolated_pixel_counter <= 2 and width != 1 and height != 1 and classified==False: # Дефект Medium Cluster
             dict_component['Cluster defect']['Medium'] += 1
             classified = True
 
-        if size <= 25 and isolated_pixel_counter <= 3 and classified==False: # Дефект Large Cluster
+        if size <= 25 and isolated_pixel_counter <= 3 and width != 1 and height != 1 and classified==False: # Дефект Large Cluster
             dict_component['Cluster defect']['Large'] += 1
             classified = True
 
         if size >= 26 and bbox_area<=169 and width != 1 and height != 1 and classified==False: # Дефект Spot Cluster
             dict_component['Spot defect'] += 1
+            classified = True
 
-        if not classified: dict_component['Non-classified connected'] += 1
+        if not classified and width != 1 and height != 1:
+            dict_component['Large spot defect'] += 1
+            classified = True
 
-    return dict_component
+        if not classified: small_row_column.append(component)
+
+    return dict_component, small_row_column
 
 
 def dict_to_xml_safe(dictionary, root_tag='root'):
@@ -158,8 +162,9 @@ def dict_to_xml_safe(dictionary, root_tag='root'):
     _dict_to_xml(root, dictionary)
     return ET.ElementTree(root)
 
-def get_dir_dmap(): #Получить список с путями к dmap`ам
+def get_dir_dmap(): #Получить список с путями к dmap`ам и размер из названия, если есть
     size_detector=[]
+    type_det=0 #Сделать позже. 0, если КМОП, 1, если TFT, и т.п.
     pattern = r'(\d+)x(\d+)' #Для записи размеров детектора 4608x5888. Может быть и 3 на 3 числа. если хотим 4 на 4, то вот: r'(\d{4})x(\d{4})'
     path = []  # Список для путей файла
     script_dir = os.path.dirname(os.path.abspath(__file__))  # Путь к скрипту
@@ -176,13 +181,13 @@ def get_dir_dmap(): #Получить список с путями к dmap`ам
                 else:
                     print('     В имени файла нет размеров, обработка будет некорректная. Добавьте размер в формате AAAAxBBBB в имя файла')
                     size_detector.append(None)
-    return path, size_detector
+    return path, size_detector, type_det
 
 def image_save(obj_, path):
     from PIL import Image  # Экспорт изображения для его просмотра
     image_normalized = (obj_ * 65535).astype(np.uint16)
     img = Image.fromarray(image_normalized).convert('I;16B')  # Сохраняем как 16-битное изображение
-    tiff_path = path.rstrip('.dmap')
+    tiff_path = os.path.splitext(path)[0]
     img.save(tiff_path + '.tiff')  # Сохраняем в ту же папку, где и был dmap
 
 def xml_export(blemish, path):
@@ -199,7 +204,34 @@ def xml_export(blemish, path):
         f.write(pretty_xml)
     return xml_path + '.xml'
 
-def determine_rows_cols(obj_):
+def classify_small_row(row_col, blemish_dict):
+    length=len(row_col)
+    small_rows=0
+    small_cols=0
+    for rr in range(length):
+        component = row_col[rr]
+        classified = False
+        if len(component) <= 5 and component[0][0]==component[-1][0] and classified == False:  # Дефект Small Cluster, строка
+            blemish_dict['Cluster defect']['Small'] += 1
+            classified = True
+            small_rows += 1
+
+        if len(component) <= 15 and component[0][0]==component[-1][0] and classified == False:  # Дефект Medium Cluster, строка
+            blemish_dict['Cluster defect']['Medium'] += 1
+            classified = True
+            small_rows += 1
+
+        if len(component) <= 442 and component[0][0]==component[-1][0] and classified == False:  # Дефект Large Cluster, строка. Тут берём < 0.15 * a/2, где a - размер детектора
+            blemish_dict['Cluster defect']['Large'] += 1
+            classified = True
+            small_rows += 1
+
+        if not classified:  # Дефект Small Cluster, строка
+            small_cols += 1
+
+    return blemish_dict, small_rows, small_cols
+
+def determine_rows_cols(obj_, det_type, row_col, blemish_dict):
     dict_row_col = {
         'Row Defect': {'Single': 0,
                            'Double': 0,
@@ -208,25 +240,249 @@ def determine_rows_cols(obj_):
         'Column Defect': {'Single': 0,
                            'Double': 0,
                           'Triple': 0,
-                          'Small Column Defects': 0,
-                           'Total Pixel Count for Column Defects': 0}
+                          'Small Column Defects': 0}
     }
 
     rows, cols = obj_.shape
-    #Тут надо сделать разделение на сегменты
-    for i_rows in range(rows):
-        col=[]
-        for j_cols in range(cols):
-            col.append(obj_[i_rows, j_cols])
 
+    if det_type==0: #Если КМОП
+    #1 верхний левый и нижний левый сегмент. "Строки"
+        j_blemish = [] #j координаты плохих линий
+        for i_rows in range(1, rows-1):
+            row=[]
+            for j_cols in range(1, (cols-1)//2):
+                row.append(obj_[i_rows, j_cols])
+            blemish_flag=row_col_analyze(row)
+            if blemish_flag:
+                j_blemish.append(i_rows) #Если плохая линия, то записываем её координату j
 
+        if j_blemish: #Если непусто
+            j_blemish_set=set(j_blemish)
+            for rc in range(len(row_col)): #Удаляем из row_col те строки, которые мы определили как дефектные
+                if (row_col[rc][0][0] in j_blemish_set) and (row_col[rc][0][0]==row_col[rc][-1][0]): #есть ли строка и является ли компонент строкой
+                    l=0
+                    max_l=len(row_col[rc])
+                    counter=0
+                    while l != max_l:
+                        if row_col[rc][counter][1] < (cols-1)//2: #Если попадаем в искомую область, то
+                            del(row_col[rc][counter])
+                            l += 1
+                        else:
+                            counter += 1
+                            l += 1
+        row_col = [item for item in row_col if item] #Удаляем пустые списки
 
+        if len(j_blemish) == 1:
+            dict_row_col['Row Defect']['Single'] += 1
+            j_blemish.pop(0)
 
+        if len(j_blemish) == 2:
+            if abs(j_blemish[1] - j_blemish[0]) <= 3:
+                dict_row_col['Row Defect']['Double'] += 1
+                j_blemish.pop(0)
+                j_blemish.pop(0)
+            else:
+                dict_row_col['Row Defect']['Single'] += 2
+                j_blemish.pop(0)
+                j_blemish.pop(0)
 
-    return dict_row_col
+        while j_blemish: #Если длина 3 и больше
+            if abs(j_blemish[0]-j_blemish[1]) <= 3:
+                if abs(j_blemish[1] - j_blemish[2]) <= 3:
+                    dict_row_col['Row Defect']['Triple'] += 1
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+                else:
+                    dict_row_col['Row Defect']['Double'] += 1
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+            else:
+                dict_row_col['Row Defect']['Single'] += 1
+                j_blemish.pop(0)
+            if len(j_blemish) == 1:
+                dict_row_col['Row Defect']['Single'] += 1
+                j_blemish.pop(0)
+            if len(j_blemish) == 2:
+                if abs(j_blemish[1] - j_blemish[0]) <= 3:
+                    dict_row_col['Row Defect']['Double'] += 1
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+                else:
+                    dict_row_col['Row Defect']['Single'] += 2
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+        #1 верхний правый и нижний правый сегмент. "Строки"
+        j_blemish = []  # j координаты плохих линий
+        for i_rows in range(1, rows-1):
+            row = []
+            for j_cols in range((cols-1)//2, cols-1):
+                row.append(obj_[i_rows, j_cols])
+            blemish_flag = row_col_analyze(row)
+            if blemish_flag:
+                j_blemish.append(i_rows)  # Если плохая линия, то записываем её координату
+
+        if j_blemish: #Если непусто
+            j_blemish_set = set(j_blemish)
+            for rc in range(len(row_col)):  # Удаляем из row_col те строки, которые мы определили как дефектные
+                if (row_col[rc][0][0] in j_blemish_set) and (row_col[rc][0][0] == row_col[rc][-1][0]):  # есть ли строка и является ли компонент строкой
+                    l = 0
+                    max_l = len(row_col[rc])
+                    counter = 0
+                    while l != max_l:
+                        if row_col[rc][counter][1] >= (cols - 1) // 2:  # Если попадаем в искомую область, то
+                            del (row_col[rc][counter])
+                            l += 1
+                        else:
+                            counter += 1
+                            l += 1
+
+        row_col = [item for item in row_col if item]  # Удаляем пустые списки
+
+        if len(j_blemish) == 1:
+            dict_row_col['Row Defect']['Single'] += 1
+            j_blemish.pop(0)
+
+        if len(j_blemish) == 2:
+            if abs(j_blemish[1] - j_blemish[0]) <= 3:
+                dict_row_col['Row Defect']['Double'] += 1
+                j_blemish.pop(0)
+                j_blemish.pop(0)
+            else:
+                dict_row_col['Row Defect']['Single'] += 2
+                j_blemish.pop(0)
+                j_blemish.pop(0)
+
+        while j_blemish:  # Если длина 3 и больше
+            if abs(j_blemish[0] - j_blemish[1]) <= 3:
+                if abs(j_blemish[1] - j_blemish[2]) <= 3:
+                    dict_row_col['Row Defect']['Triple'] += 1
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+                else:
+                    dict_row_col['Row Defect']['Double'] += 1
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+            else:
+                dict_row_col['Row Defect']['Single'] += 1
+                j_blemish.pop(0)
+            if len(j_blemish) == 1:
+                dict_row_col['Row Defect']['Single'] += 1
+                j_blemish.pop(0)
+            if len(j_blemish) == 2:
+                if abs(j_blemish[1] - j_blemish[0]) <= 3:
+                    dict_row_col['Row Defect']['Double'] += 1
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+                else:
+                    dict_row_col['Row Defect']['Single'] += 2
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+        #Для столбцов
+        j_blemish = []  # j координаты плохих линий
+        for j_cols in range(1, cols-1):
+            row = []
+            for i_rows in range(1, rows-1):
+                row.append(obj_[i_rows, j_cols])
+            blemish_flag = row_col_analyze(row)
+            if blemish_flag:
+                j_blemish.append(j_cols)  # Если плохая линия, то записываем её координату j
+
+        if j_blemish: #Если непусто
+            j_blemish_set = set(j_blemish)
+            for rc in range(len(row_col)):  # Удаляем из row_col те столбцы, которые мы определили как дефектные
+                if (row_col[rc][0][1] in j_blemish_set) and (row_col[rc][0][1] == row_col[rc][-1][1]):  # есть ли столбец и является ли столбец столбцом
+                    row_col[rc].clear()
+
+        row_col = [item for item in row_col if item]  # Удаляем пустые списки
+
+        if len(j_blemish) == 1:
+            dict_row_col['Column Defect']['Single'] += 1
+            j_blemish.pop(0)
+
+        if len(j_blemish) == 2:
+            if abs(j_blemish[1] - j_blemish[0]) <= 3:
+                dict_row_col['Column Defect']['Double'] += 1
+                j_blemish.pop(0)
+                j_blemish.pop(0)
+            else:
+                dict_row_col['Column Defect']['Single'] += 2
+                j_blemish.pop(0)
+                j_blemish.pop(0)
+
+        while j_blemish:  # Если длина 3 и больше
+            if abs(j_blemish[0] - j_blemish[1]) <= 3:
+                if abs(j_blemish[1] - j_blemish[2]) <= 3:
+                    dict_row_col['Column Defect']['Triple'] += 1
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+                else:
+                    dict_row_col['Column Defect']['Double'] += 1
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+            else:
+                dict_row_col['Column Defect']['Single'] += 1
+                j_blemish.pop(0)
+            if len(j_blemish) == 1:
+                dict_row_col['Column Defect']['Single'] += 1
+                j_blemish.pop(0)
+            if len(j_blemish) == 2:
+                if abs(j_blemish[1] - j_blemish[0]) <= 3:
+                    dict_row_col['Column Defect']['Double'] += 1
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+                else:
+                    dict_row_col['Column Defect']['Single'] += 2
+                    j_blemish.pop(0)
+                    j_blemish.pop(0)
+
+        blemish_dict, amount_row, amount_col = classify_small_row(row_col, blemish_dict)
+        dict_row_col['Row Defect']['Small Row Defects'] += amount_row
+        dict_row_col['Column Defect']['Small Column Defects'] += amount_col
+
+    else:
+        #Если TFT
+        a_else=0
+    blemish_dict.update(dict_row_col)
+    return blemish_dict
+
+def row_col_analyze(row_):
+    defective=False
+    if (row_.count(0)/len(row_)) >= 0.15:
+        defective=True
+    return defective
+
+def blemish_map_builder(blemish, size):
+    if not size: #Если пусто
+        max_value = np.max(blemish)  # Если нет в имени файла размеров
+        obj_ = np.ones((max_value + 3, max_value + 3))  # +3 чтобы убрать граничные условия. Чтобы по бокам были пиксели
+    else:
+        max_x_detector = size[0]  # Если в имени файла есть размеры
+        max_y_detector = size[1]
+        obj_ = np.ones((max_x_detector + 3, max_y_detector + 3))  # +3 чтобы убрать граничные условия. Чтобы по бокам были пиксели
+    for i_ in range(len(blemish)):
+        obj_[blemish[i_][0] + 1][blemish[i_][1] + 1] = 0  # +1 так как граничные условия
+    return obj_
+
+def dmap_blemish(defects_):
+    coordinates_ = []  # Список для координат битых пикселей из dmap
+    defects_ = np.asarray(defects_)
+    length = defects_[0]
+    defects_ = defects_[1:]
+    for i in range(length):
+        coordinates_.append([defects_[0], defects_[1]])
+        defects_ = defects_[2:]
+        corr_amount = defects_[0]
+        defects_ = defects_[(corr_amount * 2 + 1):]
+    coordinates_ = np.asarray(coordinates_)
+    return coordinates_
 
 if __name__ == "__main__":
-    file_path, detector_size = get_dir_dmap()
+
+    file_path, detector_size, detector_type = get_dir_dmap() #Узнаём путь к dmap и размер из названия, и оттуда же узнаём его тип
+
     print('Всего файлов в папке', dmap_folder, '-', len(file_path))
     for k in range(len(file_path)):
         defects = []  # В этот список записывается весь файл dmap
@@ -237,38 +493,25 @@ if __name__ == "__main__":
                         defects.append(struct.unpack('<i', file.read(4))[0])
         except struct.error: #Когда считали весь dmap
             print('Файл №', k+1, 'прочитан')
-            defects = np.asarray(defects)
-            length = defects[0]
-            defects = defects[1:]
-            for i in range(length):
-                coordinates.append([defects[0], defects[1]])
-                defects = defects[2:]
-                corr_amount = defects[0]
-                defects = defects[(corr_amount * 2 + 1):]
-            coordinates = np.asarray(coordinates)
-            if not detector_size[k]:
-                max_value = np.max(coordinates) #Если нет в имени файла размеров
-                obj = np.ones((max_value + 2, max_value + 2))  # +2 чтобы убрать граничные условия. Чтобы по бокам были пиксели
-                obj_rows_cols = np.ones((max_value, max_value))
-            else:
-                max_x_detector = detector_size[k][0] #Если в имени файла есть размеры
-                max_y_detector = detector_size[k][1]
-                obj = np.ones((max_x_detector + 2, max_y_detector + 2))  # +2 чтобы убрать граничные условия. Чтобы по бокам были пиксели
-                obj_rows_cols = np.ones((max_x_detector, max_y_detector))
-            for i in range(len(coordinates)):
-                obj[coordinates[i][0] + 1][coordinates[i][1] + 1] = 0  # +1 так как граничные условия
+
+            coordinates = dmap_blemish(defects) #Вынимаем из dmap координаты дефектных пикселей
+
+            obj = blemish_map_builder(coordinates, detector_size[k]) #Строится карта битых пикселей
+
             image_save(obj, file_path[k]) #Сохраняем карту битых пикселей
             print('     Карта битых пикселей сохранена как .tiff')
+
             list_components, defect_pixel_counter = find_connected_components(obj) #Возвращает лист с несвязными кластерами и общее количество дефектных пикселей
             print('     Несвязные кластеры определены, выполняется их классификация и расчёт изолированных пикселей')
-            d = determine_shape_type(list_components) #Классификация и кластеризация
-            Blemish_type = {'Total defect pixels': defect_pixel_counter}
-            Blemish_type.update(d) #Словарь без RowCol
 
-            row_column_dict=determine_rows_cols(obj_rows_cols)
-            Blemish_type.update(row_column_dict)
-            print('     ', Blemish_type)
-            xml_save_path=xml_export(Blemish_type, file_path[k]) #Экспорт в xml
+            d, row_column_small_components = determine_shape_type(list_components) #Классификация и кластеризация
+
+            blemish_type = {'Total defect pixels': defect_pixel_counter}
+            blemish_type.update(d) #Словарь без RowCol
+            print('     Определяются дефектные строки и столбцы')
+            blemish_type=determine_rows_cols(obj, detector_type, row_column_small_components, blemish_type)
+            print('    ', blemish_type)
+            xml_save_path=xml_export(blemish_type, file_path[k]) #Экспорт в xml
             print('     Сохранён xml файл с классификацией')
         except Exception as e:
             print(f"    Другая ошибка: {e}") #Другая ошибка
