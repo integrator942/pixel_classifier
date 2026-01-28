@@ -8,8 +8,8 @@
     <Medium>0</Medium>
     <Large>1</Large>
   </Cluster_defect>
-  <Spot_defect>0</Spot_defect>
-  <Large_spot_defect>4</Large_spot_defect>
+  <Spot_defect>1</Spot_defect>
+  <Large_spot_defect>3</Large_spot_defect>
   <Row_Defect>
     <Single>3</Single>
     <Double>2</Double>
