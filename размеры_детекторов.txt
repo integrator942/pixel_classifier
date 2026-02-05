@@ -1,0 +1,8 @@
+4608_5888
+3480_4352
+
+2816x3584
+4608x5888
+
+d:\pixel_classifier\dmap\4+\SDM-17100525\CorrectionData\_DefectPixels\3480_4352_SDM-17100365\DefectMap.dmap
+Брать последние размеры и серийник детектора в название           

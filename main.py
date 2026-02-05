@@ -18,7 +18,7 @@ directions_list = [                    #Связность 8
     ]
 
 def find_connected_components(image):
-    def_pix_counter = 0
+    def_pix_counter = 0 #Счётчик дефектных пикселей
     #Нахождение связных компонент (8-связность)
     rows, cols = image.shape
     visited = np.zeros_like(image, dtype=bool)
@@ -27,6 +27,7 @@ def find_connected_components(image):
     for i in range(rows):
         for j in range(cols):
             if image[i, j] == 0 and not visited[i, j]:
+                def_pix_counter += 1
                 # Начинаем новый компонент
                 component = []
                 queue = deque([(i, j)]) #Эта штука быстрее списка
@@ -167,43 +168,75 @@ def dict_to_xml_safe(dictionary, root_tag='root'):
     return ET_.ElementTree(root)
 
 def get_dir_dmap(): #Получить список с путями к dmap`ам и размер из названия, если есть
-    size_detector=[]
-    pattern = r'(\d+)x(\d+)' #Для записи размеров детектора 4608x5888. Может быть и 3 на 3 числа. если хотим 4 на 4, то вот: r'(\d{4})x(\d{4})'
+    size_detector=[] #список со всеми параметрами каждого детекторы. РазмерX, размерY, TFT/CMOS, серийный номер
+    pattern_serial=r'(\d{8})' #Регулярное выражение для поиска серийного номера
+    archive_pattern=r'archive' #Регулярное выражение для архива
+    pattern = r'(\d{3,4})[_x](\d{3,4})' #Для записи размеров детектора 4608x5888. Может быть и 3 на 3 числа r'(\d+)_(\d+)'. если хотим 4 на 4, то вот: r'(\d{4})x(\d{4})'
     path = []  # Список для путей файла
-    if getattr(sys, 'frozen', False): #Проверка, как запущен скрипт
+    if getattr(sys, 'frozen', False): #Проверка, как запущен скрипт. Это для .exe исполнения
         script_dir = os.path.dirname(sys.executable)
     else:
         script_dir = os.path.dirname(os.path.abspath(__file__))
     files_folder = os.path.join(script_dir, dmap_folder)  # название папки, где dmap ы лежат
     if os.path.exists(files_folder) and os.path.isdir(files_folder):  # Проверяем, существует ли папка и является ли она папкой
-        for filename in os.listdir(files_folder):  # Обрабатываем все файлы в папке
-            if filename.lower().endswith(extension):
-                path.append(os.path.join(files_folder, filename))
-                match = re.search(pattern, filename, re.IGNORECASE)
-                if match:
-                    width_f = int(match.group(1))
-                    height_f = int(match.group(2))
-                    if width_f==4608 and height_f==5888:
-                        size_detector.append((width_f, height_f, 'CMOS'))
-                    elif width_f==2816 and height_f==3584:
-                        size_detector.append((width_f, height_f, 'TFT'))
-                    else:
-                        print('     В имени файла неизвестные размеры, обработка будет по CMOS')
-                        size_detector.append((width_f, height_f, 'CMOS'))
-                else:
-                    print('     В имени файла нет размеров. Добавьте размер в формате AAAAxBBBB в имя файла, обработка будет по CMOS')
-                    size_detector.append((0, 0, 'CMOS'))
-    return path, size_detector
+        for root, dirs, files in os.walk(files_folder):  # Обрабатываем все файлы в папке, в т.ч. вложенные папки
+            for filename in files: #Для всех найденных файлов
+                if filename.lower().endswith(extension): #Если оканчивается на extension
+                    full_path=os.path.join(root, filename) #Полный путь к файлу
+                    if not re.search(archive_pattern, full_path, re.IGNORECASE): #Если нет паттерна архива
+                        match = re.search(pattern, full_path, re.IGNORECASE) #Ищем паттерн размеров
+                        if match: #Если нашёл размеры
+                            width_f = int(match.group(1))
+                            height_f = int(match.group(2))
+                            match1 = re.findall(pattern_serial, full_path, re.IGNORECASE)  # Ищем паттерн серйиного номера, 8 цифр подряд
+                            if match1:
+                                serial_number = "_".join(str(x) for x in match1)
+                                if len(match1)==2:
+                                    if match1[0]==match1[1]:
+                                        serial_number=match1[0]
+                            else:
+                                serial_number = 'Serial_None'
+                                print('В пути', full_path,'нет серийного номера')
+                            if width_f==4608 and height_f==5888:
+                                size_detector.append((width_f, height_f, 'CMOS', serial_number))
+                                path.append(full_path)
+                            elif width_f==2816 and height_f==3584:
+                                size_detector.append((width_f, height_f, 'TFT', serial_number))
+                                path.append(full_path)
+                            elif width_f==3480 and height_f==4352:
+                                size_detector.append((width_f, height_f, 'TFT', serial_number))
+                                path.append(full_path) #Другие размеры не обрабатываем
+                        else: #Не нашёл размеры
+                            print('В пути', full_path,'нет размеров. Добавьте размер в формате AAAAxBBBB в путь или в название, обработка будет по CMOS')
+                            size_detector.append((0, 0, 'None', 'Serial_None'))
+                            path.append(full_path)
+    else:
+        print('Папка dmap не найдена')
+        exit(1)
+    return path, size_detector, files_folder
 
-def image_save(obj_, path):
+def image_save(obj_, results_path_, size_detector):
     from PIL import Image  # Экспорт изображения для его просмотра
     image_normalized = (obj_ * 65535).astype(np.uint16)
     img = Image.fromarray(image_normalized).convert('I;16B')  # Сохраняем как 16-битное изображение
-    tiff_path = os.path.splitext(path)[0]
-    img.save(tiff_path + '.tiff')  # Сохраняем в ту же папку, где и был dmap
+    os.makedirs(results_path_, exist_ok=True)
+    i=0
+    tiff_path = results_path_ + str(size_detector[0])+'_'+str(size_detector[1])+'_'+size_detector[2]+'_'+size_detector[3]
+    if os.path.exists(tiff_path + '.tiff'):
+        i += 1
+        while True:
+            if os.path.exists(tiff_path + '_' + str(i) + '.tiff'):
+                i += 1
+            else:
+                img.save(tiff_path + '_' + str(i) + '.tiff')
+                print('     Файл', tiff_path + '_'+str(i) + '.tiff', 'сохранён')
+                break
+    else:
+        img.save(tiff_path + '.tiff')
+        print('     Файл', tiff_path + '.tiff', 'сохранён')
 
-def xml_export(blemish, path):
-    xml_path = os.path.splitext(path)[0]
+def xml_export(blemish, results_path_, size_detector):
+    xml_path = results_path_ + str(size_detector[0])+'_'+str(size_detector[1])+'_'+size_detector[2]+'_'+size_detector[3]
     tree = dict_to_xml_safe(blemish, 'Blemish_type')
     xml_str = ET_.tostring(tree.getroot(),
                           encoding='utf-8',
@@ -212,9 +245,24 @@ def xml_export(blemish, path):
     pretty_xml = dom.toprettyxml(indent="  ")
     pretty_xml = '\n'.join([line for line in pretty_xml.split('\n')
                             if line.strip() != ''])
-    with open(xml_path + '.xml', 'w', encoding='utf-8') as f:
-        f.write(pretty_xml)
-    return xml_path + '.xml'
+    i = 0
+    if os.path.exists(xml_path + '.xml'):
+        i += 1
+        while True:
+            if os.path.exists(xml_path + '_' + str(i) + '.xml'):
+                i += 1
+            else:
+                break
+    if i == 0:
+        with open(xml_path + '.xml', 'w', encoding='utf-8') as f:
+            f.write(pretty_xml)
+        path=xml_path + '.xml'
+    else:
+        with open(xml_path + '_' + str(i) + '.xml', 'w', encoding='utf-8') as f:
+            f.write(pretty_xml)
+        path=xml_path + '_' + str(i) + '.xml'
+    return path
+
 
 def classify_small_row(row_col, blemish_dict, det_type):
     small_rows=0
@@ -522,7 +570,8 @@ def row_col_analyze(row_):
         defective=True
     return defective
 
-def blemish_map_builder(blemish, size, path):
+def blemish_map_builder(blemish, size):
+    fl_=True
     if size[0]==0: #Если не знаем размеры
         max_value = np.max(blemish)  # Если нет в имени файла размеров
         obj_ = np.ones((max_value + 3, max_value + 3))  # +3 чтобы убрать граничные условия. Чтобы по бокам были пиксели
@@ -534,10 +583,9 @@ def blemish_map_builder(blemish, size, path):
         for i_ in range(len(blemish)):
             obj_[blemish[i_][0] + 1][blemish[i_][1] + 1] = 0  # +1 так как граничные условия
     except IndexError: #Если dmap содержит координаты больше, чем в названии
-        print('!!!!!!!!!!!Обработка прервана, dmap содержит координаты больше, чем указаны в названии!!!!!!!!')
-        print(path)
-        exit(1)
-    return obj_
+        print('!!!!!!!!!!!dmap содержит координаты больше, чем указаны. Обработка файла выполнена не будет!!!!!!!!')
+        fl_=False
+    return obj_, fl_
 
 def dmap_blemish(defects_):
     coordinates_ = []  # Список для координат битых пикселей из dmap
@@ -553,11 +601,12 @@ def dmap_blemish(defects_):
     return coordinates_
 
 if __name__ == "__main__":
-
+    bad_counter=0 #Пустые dmap или несоответствующие размерам из описания
     print('Made by integrator942, Medical Tech. Ltd.')
     print('Blemish pixel structure classifier')
-    file_path, detector_size = get_dir_dmap() #Узнаём путь к dmap и размер из названия, и оттуда же узнаём его тип
-    print('Всего файлов в папке', dmap_folder, '-', len(file_path))
+    file_path, detector_size, dmap_path = get_dir_dmap() #Узнаём путь к dmap и размер из пути, и оттуда же узнаём его тип по размерам
+    results_path = os.path.join(dmap_path, 'results'+ os.sep) #Создаём папку с названием results в dmap
+    print('Всего найдено полноформатных dmap', dmap_folder, '-', len(file_path))
     for k in range(len(file_path)):
         defects = []  # В этот список записывается весь файл dmap
         coordinates = []  # Список для координат битых пикселей из dmap
@@ -566,30 +615,33 @@ if __name__ == "__main__":
                 while True:
                         defects.append(struct.unpack('<i', file.read(4))[0])
         except struct.error: #Когда считали весь dmap
-            print('Файл №', k+1, 'прочитан')
+                if len(defects) == 0:
+                    bad_counter += 1
+                else:
+                    coordinates = dmap_blemish(defects) #Вынимаем из dmap координаты дефектных пикселей
+                    print('Файл №', k+1, file_path[k], 'прочитан')
+                    obj, fl = blemish_map_builder(coordinates, detector_size[k]) #Строится карта битых пикселей
+                    if fl:
+                        #image_save(obj, results_path, detector_size[k]) #Сохраняем карту битых пикселей
+                        #print('     Карта битых пикселей сохранена как .tiff')
 
-            coordinates = dmap_blemish(defects) #Вынимаем из dmap координаты дефектных пикселей
+                        list_components, defect_pixel_counter = find_connected_components(obj) #Возвращает лист с несвязными кластерами и общее количество дефектных пикселей
+                        print('     Несвязные кластеры определены, выполняется их классификация и расчёт изолированных пикселей')
 
-            obj = blemish_map_builder(coordinates, detector_size[k], file_path[k]) #Строится карта битых пикселей
+                        d, row_column_small_components = determine_shape_type(list_components) #Классификация и кластеризация
 
-            image_save(obj, file_path[k]) #Сохраняем карту битых пикселей
-            print('     Карта битых пикселей сохранена как .tiff')
-
-            list_components, defect_pixel_counter = find_connected_components(obj) #Возвращает лист с несвязными кластерами и общее количество дефектных пикселей
-            print('     Несвязные кластеры определены, выполняется их классификация и расчёт изолированных пикселей')
-
-            d, row_column_small_components = determine_shape_type(list_components) #Классификация и кластеризация
-
-            blemish_type = {'Total defect pixels': defect_pixel_counter}
-            blemish_type.update(d) #Словарь без RowCol
-            print('     Определяются дефектные строки и столбцы')
-            blemish_type=determine_rows_cols(obj, detector_size[k], row_column_small_components, blemish_type)
-            print('    ', blemish_type)
-            xml_save_path=xml_export(blemish_type, file_path[k]) #Экспорт в xml
-            print('     Сохранён xml файл с классификацией')
+                        blemish_type = {'Total defect pixels': defect_pixel_counter}
+                        blemish_type.update(d) #Словарь без RowCol
+                        print('     Определяются дефектные строки и столбцы')
+                        blemish_type=determine_rows_cols(obj, detector_size[k], row_column_small_components, blemish_type)
+                        print('    ', blemish_type)
+                        xml_save_path=xml_export(blemish_type,results_path ,detector_size[k]) #Экспорт в xml
+                        print('     Сохранён xml файл с классификацией', xml_save_path + '.xml')
+                    else: bad_counter += 1
         except Exception as e:
             print(f"    Другая ошибка: {e}") #Другая ошибка
     print('Все файлы обработаны')
+    print('dmap пустые или с несответстующими размерами:', bad_counter)
 
 
 
