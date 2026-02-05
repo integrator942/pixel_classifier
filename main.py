@@ -606,7 +606,7 @@ if __name__ == "__main__":
     print('Blemish pixel structure classifier')
     file_path, detector_size, dmap_path = get_dir_dmap() #Узнаём путь к dmap и размер из пути, и оттуда же узнаём его тип по размерам
     results_path = os.path.join(dmap_path, 'results'+ os.sep) #Создаём папку с названием results в dmap
-    print('Всего найдено полноформатных dmap', dmap_folder, '-', len(file_path))
+    print('Всего найдено полноформатных dmap в', dmap_path, '-', len(file_path))
     for k in range(len(file_path)):
         defects = []  # В этот список записывается весь файл dmap
         coordinates = []  # Список для координат битых пикселей из dmap
